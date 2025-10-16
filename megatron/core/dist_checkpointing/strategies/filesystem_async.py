@@ -263,7 +263,7 @@ class FileSystemWriterAsync(FileSystemWriter):
         logger = logging.getLogger(__name__)
         w_start = time()
         write_results_or_exc: Union[dict, Exception] = dict()
-        ctx = mp.get_context("fork")
+        ctx = mp.get_context("spawn") # modify this to spawn to work around msc + dss issues
         local_results_queue = ctx.Queue()
         count_queue = ctx.JoinableQueue()
         p_list = []
@@ -374,13 +374,35 @@ class FileSystemWriterAsync(FileSystemWriter):
                 from torch.distributed.checkpoint.filesystem import SerializationFormat
 
                 extra_kwargs["serialization_format"] = SerializationFormat.TORCH_SAVE
+            
+            
+            # Prepare arguments for open_file
+            open_file_kwargs = {"mode": "wb"}
             if use_msc:
                 import multistorageclient as msc
+                import re
 
                 open_file = msc.open
+                # Extract rank from filename (format: path/to/iter_NNNN/__<rank>_<idx>.distcp)
+                # Example: /path/iter_0000040/__7_1.distcp -> rank = 7
+                basename = os.path.basename(file_name)
+                rank_match = re.match(r'__(\d+)_\d+\.distcp', basename)
+                if rank_match:
+                    global_rank = rank_match.group(1)
+                else:
+                    global_rank = "0"
+                
+                # MSC attribute dictionary for .distcp shard files
+                attribute_dict = {
+                    "step": str(int(os.path.basename(os.path.dirname(file_name)).split("_")[-1])),
+                    "global_rank": global_rank,
+                    "slurm_cluster": os.getenv("SLURM_CLUSTER_NAME", "N/A"),
+                }
+                open_file_kwargs['attributes'] = attribute_dict
             else:
                 open_file = open
-            with open_file(file_name, "wb") as stream:
+            
+            with open_file(file_name, **open_file_kwargs) as stream:
                 for write_item, data in bytes_data:
                     local_results.append(
                         _write_item(
@@ -491,8 +513,14 @@ class FileSystemWriterAsync(FileSystemWriter):
             metadata.storage_meta = self.storage_meta()
 
             path = os.path.join(self.checkpoint_dir, ".metadata")
+            attribute_dict = {
+                # Core attributes
+                "step": str(int(os.path.basename(os.path.normpath(self.checkpoint_dir)).split("_")[-1])),
+                # SLURM Info
+                "slurm_cluster": os.getenv("SLURM_CLUSTER_NAME", "N/A"),
+            }
 
-            with msc.open(path, "wb") as metadata_file:
+            with msc.open(path, "wb", attributes=attribute_dict) as metadata_file:
                 pickle.dump(metadata, metadata_file)
         else:
             super().finish(metadata, results)

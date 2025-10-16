@@ -41,9 +41,15 @@ class TorchCommonSaveStrategy(SaveCommonStrategy):
         """Save common part of the state dict."""
         if torch.distributed.get_rank() == 0:
             path = os.path.join(checkpoint_dir, COMMON_STATE_FNAME)
+            attribute_dict = {
+                # Core attributes
+                "step": str(int(os.path.basename(os.path.normpath(checkpoint_dir)).split("_")[-1])),
+                # SLURM Info
+                "slurm_cluster": os.getenv("SLURM_CLUSTER_NAME", "N/A"),
+            }
             if MultiStorageClientFeature.is_enabled():
                 msc = MultiStorageClientFeature.import_package()
-                msc.torch.save(common_state_dict, path)
+                msc.torch.save(common_state_dict, path, attributes = attribute_dict)
             else:
                 torch.save(common_state_dict, path)
 
@@ -54,11 +60,17 @@ class TorchCommonSaveStrategy(SaveCommonStrategy):
         for sh_obj in nested_values(sharded_objects_state_dict):
             if is_main_replica(sh_obj.replica_id):
                 save_path = os.path.join(checkpoint_dir, f"{sh_obj.unique_key}.pt")
+                attribute_dict = {
+                    # Core attributes
+                    "step": str(int(os.path.basename(os.path.normpath(checkpoint_dir)).split("_")[-1])),
+                    # SLURM Info
+                    "slurm_cluster": os.getenv("SLURM_CLUSTER_NAME", "N/A"),
+                }
                 parent_dir = os.path.dirname(save_path)
                 if MultiStorageClientFeature.is_enabled():
                     msc = MultiStorageClientFeature.import_package()
                     msc.os.makedirs(parent_dir, exist_ok=True)
-                    msc.torch.save(sh_obj.data, save_path)
+                    msc.torch.save(sh_obj.data, save_path, attributes = attribute_dict)
                 else:
                     os.makedirs(parent_dir, exist_ok=True)
                     torch.save(sh_obj.data, save_path)

@@ -84,9 +84,15 @@ def save_config(config: CheckpointingConfig, checkpoint_dir: str):
         None
     """
     config_path = os.path.join(checkpoint_dir, CONFIG_FNAME)
+    attribute_dict = {
+        # Core attributes
+        "step": str(int(os.path.basename(os.path.normpath(checkpoint_dir)).split("_")[-1])),
+        # SLURM Info
+        "slurm_cluster": os.getenv("SLURM_CLUSTER_NAME", "N/A"),
+    }
     if MultiStorageClientFeature.is_enabled():
         msc = MultiStorageClientFeature.import_package()
-        with msc.open(config_path, 'w') as f:
+        with msc.open(config_path, 'w', attributes = attribute_dict) as f:
             json.dump(asdict(config), f)
     else:
         with open(config_path, 'w') as f:
